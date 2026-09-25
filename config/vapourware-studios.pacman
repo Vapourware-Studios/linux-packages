@@ -1,3 +1,3 @@
 [vapourware-studios]
 SigLevel = Required
-Server = https://vapourware-studios.github.io/linux-packages/arch/$arch
+Server = https://packages.vapourware-studios.net/arch/$arch

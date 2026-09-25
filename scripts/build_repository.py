@@ -14,7 +14,9 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "Vapourware-Studios/sshclient"
+PACKAGES = "Vapourware-Studios/linux-packages"
 REPO_NAME = "vapourware-studios"
+PAYLOADS = (".deb", ".rpm", ".pkg.tar.zst")
 ARCHES = {
     "x64": {"deb": "amd64", "rpm": "x86_64", "pacman": "x64", "native": "x86_64"},
     "arm64": {"deb": "arm64", "rpm": "aarch64", "pacman": "aarch64", "native": "aarch64"},
@@ -186,6 +188,42 @@ def build_rpm(packages, output, fingerprint):
         sign(directory / "repodata" / "repomd.xml", fingerprint, armor=True)
 
 
+def strip_payloads(output, version, work):
+    """Replace the package payloads with a redirect map.
+
+    Only signed metadata is served from packages.vapourware-studios.net; the
+    worker turns each payload path into a redirect to the release that already
+    hosts those bytes. The indexes keep their normal relative paths, so every
+    package manager still resolves them the usual way.
+
+    Debian and Arch packages go out byte-for-byte as the application release
+    built them, so they redirect straight to it. `rpmsign --addsign` rewrites
+    the RPM to embed its signature, so the checksum createrepo_c recorded only
+    matches the signed copy — those are republished on this repository's own
+    release and redirect there instead.
+    """
+    source = f"https://github.com/{SOURCE}/releases/download/v{version}"
+    ours = f"https://github.com/{PACKAGES}/releases/download/v{version}"
+    assets = work / "release-assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    redirects = {}
+    for file in sorted(output.rglob("*")):
+        if not file.is_file() or not file.name.endswith(PAYLOADS):
+            continue
+        path = file.relative_to(output).as_posix()
+        if file.name.endswith(".rpm"):
+            redirects[path] = f"{ours}/{file.name}"
+            shutil.move(str(file), assets / file.name)
+        else:
+            redirects[path] = f"{source}/{file.name}"
+            file.unlink()
+    if not redirects:
+        raise ValueError("No package payloads were found to redirect")
+    (output / "manifest.json").write_text(
+        json.dumps({"schema": 1, "version": version, "redirects": redirects}, indent=2, sort_keys=True) + "\n")
+    return redirects, {file.name: checksum(file) for file in sorted(assets.iterdir())}
+
+
 def make_archive(output, target):
     def neutral_metadata(info):
         info.uid = info.gid = 0
@@ -228,13 +266,16 @@ def main():
     build_pacman(packages, args.output, fingerprint)
     build_rpm(packages, args.output, fingerprint)
     shutil.copytree(ROOT / "config", args.output / "config")
-    if sum(f.stat().st_size for f in args.output.rglob("*") if f.is_file()) > 950_000_000:
-        raise ValueError("Package repository exceeds the Pages size budget")
+    redirects, signed_rpms = strip_payloads(args.output, args.version, args.work_dir)
+    # Metadata only: indexes, signatures and the public key. Anything close to
+    # this size means a payload escaped the redirect map.
+    if sum(f.stat().st_size for f in args.output.rglob("*") if f.is_file()) > 20_000_000:
+        raise ValueError("Signed metadata is far larger than expected")
     archive = args.work_dir / f"linux-packages-{args.version}.tar.gz"
     make_archive(args.output, archive)
     record = {"schema": 1, "version": args.version, "source": f"https://github.com/{SOURCE}/releases/tag/v{args.version}",
               "signing_fingerprint": fingerprint, "archive": archive.name, "sha256": checksum(archive),
-              "source_checksums": source_digests}
+              "source_checksums": source_digests, "redirects": len(redirects), "signed_rpms": signed_rpms}
     record_path.write_text(json.dumps(record, indent=2) + "\n")
     readme = ROOT / "README.md"
     readme.write_text(readme.read_text().replace(

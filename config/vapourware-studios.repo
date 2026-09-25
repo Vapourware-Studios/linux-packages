@@ -1,7 +1,7 @@
 [vapourware-studios]
 name=Vapourware-Studios
-baseurl=https://vapourware-studios.github.io/linux-packages/rpm/$basearch/
+baseurl=https://packages.vapourware-studios.net/rpm/$basearch/
 enabled=1
 gpgcheck=1
 repo_gpgcheck=1
-gpgkey=https://vapourware-studios.github.io/linux-packages/signing-key.asc
+gpgkey=https://packages.vapourware-studios.net/signing-key.asc
