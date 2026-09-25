@@ -1,0 +1,23 @@
+name: Test package repositories
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repositories:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install native package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils dpkg-dev rpm createrepo-c pacman-package-manager libarchive-tools zstd gnupg
+      - name: Test signatures and package-manager indexes
+        run: python3 -m unittest discover -s test -v

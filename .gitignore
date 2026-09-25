@@ -1,0 +1,14 @@
+_site/
+work/
+*.tar.gz
+*.rpm
+*.deb
+*.pkg.tar.zst
+*.sig
+__pycache__/
+*.pyc
+.env
+.DS_Store
+node_modules/
+dist/
+.claude/
