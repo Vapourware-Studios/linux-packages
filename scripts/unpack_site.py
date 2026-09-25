@@ -28,11 +28,17 @@ def unpack(archive, destination, record):
             if path.is_absolute() or ".." in path.parts or not member.isfile() or member.name in names:
                 raise ValueError("Repository archive contains an unsafe or duplicate entry")
             names.add(member.name)
-        if sum(m.size for m in members) > 950_000_000:
+        # Only dnf's repodata, the public key and the setup files are hosted;
+        # apt and pacman read their indexes straight from a release.
+        if sum(m.size for m in members) > 20_000_000:
             raise ValueError("Repository archive exceeds the deployment size budget")
-        required = {"signing-key.asc", "signing-key-fingerprint.txt", "apt/dists/stable/InRelease"}
+        required = {"signing-key.asc", "signing-key-fingerprint.txt",
+                    "rpm/x86_64/repodata/repomd.xml", "rpm/x86_64/repodata/repomd.xml.asc",
+                    "rpm/aarch64/repodata/repomd.xml"}
         if not required.issubset(names):
             raise ValueError("Repository archive is incomplete")
+        if any(name.endswith((".deb", ".rpm", ".pkg.tar.zst")) for name in names):
+            raise ValueError("Repository archive must not contain package payloads")
         source.extractall(destination, members=members, filter="data")
     fingerprint = (Path(destination) / "signing-key-fingerprint.txt").read_text().strip()
     if fingerprint != record.get("signing_fingerprint"):

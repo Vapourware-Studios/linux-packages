@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
-"""Build signed native repositories from a complete SSH Client release."""
+"""Build signed native repositories from a complete SSH Client release.
+
+Almost nothing is hosted. apt and pacman both support a flat repository — one
+directory, no `dists/` or `pool/` hierarchy — so their indexes and packages are
+published as GitHub release assets and fetched straight from there. Only dnf
+insists on `<baseurl>/repodata/repomd.xml`, a real directory path that release
+asset names cannot express, so its repodata alone is served from Pages while
+`createrepo_c --baseurl` points dnf at the release for the packages themselves.
+
+The result is a few hundred kilobytes of hosted metadata instead of hundreds of
+megabytes of packages, and no package byte is ever served from Pages.
+"""
 import argparse
 import gzip
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import shutil
@@ -14,7 +24,12 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "Vapourware-Studios/sshclient"
+PACKAGES = "Vapourware-Studios/linux-packages"
+DOWNLOAD = f"https://github.com/{PACKAGES}/releases/download"
 REPO_NAME = "vapourware-studios"
+# Fixed tags, clobbered on every release, so the URLs in an installed config
+# never change. Versioned releases carry history separately.
+APT_TAG = "repo-apt"
 ARCHES = {
     "x64": {"deb": "amd64", "rpm": "x86_64", "pacman": "x64", "native": "x86_64"},
     "arm64": {"deb": "arm64", "rpm": "aarch64", "pacman": "aarch64", "native": "aarch64"},
@@ -95,9 +110,24 @@ def download_release(version, work):
     return packages, digests
 
 
-def sign(file, fingerprint, *, armor=False, clear=False):
+def local_release(directory, version):
+    """Use packages already on disk, for testing the pipeline without a release."""
+    packages = {}
+    digests = {}
+    for arch, assets in expected_assets(version).items():
+        packages[arch] = {}
+        for kind, name in assets.items():
+            file = Path(directory) / name
+            if not file.is_file():
+                raise ValueError(f"Missing local package: {name}")
+            packages[arch][kind] = file
+            digests[name] = checksum(file)
+    return packages, digests
+
+
+def sign(file, fingerprint, *, armor=False, clear=False, output=None):
     suffix = ".asc" if armor else ".sig"
-    target = file.parent / "InRelease" if clear else Path(str(file) + suffix)
+    target = output or Path(str(file) + suffix)
     args = ["gpg", "--batch", "--yes", "--pinentry-mode", "loopback", "--local-user", fingerprint,
             "--digest-algo", "SHA256", "--output", str(target)]
     if armor:
@@ -133,57 +163,86 @@ def validate_packages(packages, version):
             raise ValueError(f"Unexpected Arch package metadata for {arch}")
 
 
-def build_apt(packages, output, fingerprint):
-    apt = output / "apt"
-    pool = apt / "pool" / "main"
-    pool.mkdir(parents=True)
-    for formats in packages.values():
-        shutil.copy2(formats["deb"], pool)
-    for names in ARCHES.values():
-        directory = apt / "dists" / "stable" / "main" / f"binary-{names['deb']}"
+def build_apt(packages, assets, fingerprint):
+    """Flat apt repository: one directory, both CPUs, no dists/ or pool/.
+
+    `Filename:` is rewritten to a bare name because a flat repository resolves
+    it against the base URI, and a release download URL has no directory to
+    hold the `./` that dpkg-scanpackages emits.
+    """
+    flat = assets / APT_TAG
+    staging = flat.parent / f"{APT_TAG}-staging"
+    for directory in (flat, staging):
         directory.mkdir(parents=True)
-        index = run("dpkg-scanpackages", "--arch", names["deb"], "pool", cwd=apt, capture=True)
-        (directory / "Packages").write_bytes(index)
-        (directory / "Packages.gz").write_bytes(gzip.compress(index, mtime=0))
-    release_dir = apt / "dists" / "stable"
+    for formats in packages.values():
+        shutil.copy2(formats["deb"], staging)
+        shutil.copy2(formats["deb"], flat)
+    index = run("dpkg-scanpackages", "--multiversion", ".", cwd=staging, capture=True)
+    index = re.sub(rb"^Filename: \./", b"Filename: ", index, flags=re.MULTILINE)
+    (flat / "Packages").write_bytes(index)
+    (flat / "Packages.gz").write_bytes(gzip.compress(index, mtime=0))
+
+    # Generate Release over the indexes alone. Running apt-ftparchive in a
+    # directory holding the .deb files would list those as index files too.
+    meta = flat.parent / f"{APT_TAG}-meta"
+    meta.mkdir()
+    for name in ("Packages", "Packages.gz"):
+        shutil.copy2(flat / name, meta)
     options = {"Origin": "Vapourware-Studios", "Label": "Vapourware-Studios",
-               "Suite": "stable", "Codename": "stable", "Architectures": "amd64 arm64", "Components": "main"}
+               "Suite": "stable", "Codename": "stable", "Architectures": "amd64 arm64"}
     args = [part for key, value in options.items() for part in ("-o", f"APT::FTPArchive::Release::{key}={value}")]
-    release = release_dir / "Release"
-    release.write_bytes(run("apt-ftparchive", *args, "release", str(release_dir), capture=True))
-    detached = sign(release, fingerprint, armor=True)
-    detached.rename(release_dir / "Release.gpg")
-    sign(release, fingerprint, clear=True)
+    release = meta / "Release"
+    release.write_bytes(run("apt-ftparchive", *args, "release", ".", cwd=meta, capture=True))
+    shutil.copy2(release, flat / "Release")
+    sign(flat / "Release", fingerprint, armor=True, output=flat / "Release.gpg")
+    sign(flat / "Release", fingerprint, clear=True, output=flat / "InRelease")
+    shutil.rmtree(staging)
+    shutil.rmtree(meta)
 
 
-def build_pacman(packages, output, fingerprint):
+def build_pacman(packages, assets, fingerprint):
+    """Flat pacman repository per CPU; Server uses $arch to pick the tag."""
     for arch, formats in packages.items():
-        directory = output / "arch" / ARCHES[arch]["native"]
+        native = ARCHES[arch]["native"]
+        directory = assets / f"repo-arch-{native}"
         directory.mkdir(parents=True)
         package = directory / formats["pacman"].name
         shutil.copy2(formats["pacman"], package)
         sign(package, fingerprint)
         run("repo-add", "--include-sigs", "--sign", "--key", fingerprint,
             str(directory / f"{REPO_NAME}.db.tar.gz"), str(package))
-        # Pages artifacts cannot contain symlinks.
+        # Release assets are plain files; resolve repo-add's symlinks.
         for link in directory.iterdir():
             if link.is_symlink():
-                data = link.read_bytes()
+                data = link.resolve().read_bytes()
                 link.unlink()
                 link.write_bytes(data)
         run("gpg", "--batch", "--verify", str(directory / f"{REPO_NAME}.db.sig"), str(directory / f"{REPO_NAME}.db"))
 
 
-def build_rpm(packages, output, fingerprint):
+def build_rpm(packages, site, assets, fingerprint):
+    """RPM packages go to a release; only repodata is hosted.
+
+    dnf always looks for `<baseurl>/repodata/repomd.xml`, which a flat release
+    cannot provide, so repodata is served from Pages. `--baseurl` writes an
+    xml:base into the index so the packages themselves still come from the
+    release. rpmsign rewrites the package, so the copy indexed here is the copy
+    that gets published.
+    """
     for arch, formats in packages.items():
-        directory = output / "rpm" / ARCHES[arch]["native"]
+        native = ARCHES[arch]["native"]
+        directory = assets / f"repo-rpm-{native}"
         directory.mkdir(parents=True)
         package = directory / formats["rpm"].name
         shutil.copy2(formats["rpm"], package)
         run("rpmsign", "--define", f"_gpg_name {fingerprint}", "--define", "_gpg_digest_algo sha256",
             "--define", "__gpg /usr/bin/gpg", "--addsign", str(package))
-        run("createrepo_c", "--checksum", "sha256", "--no-database", str(directory))
-        sign(directory / "repodata" / "repomd.xml", fingerprint, armor=True)
+        run("createrepo_c", "--checksum", "sha256", "--no-database",
+            "--baseurl", f"{DOWNLOAD}/repo-rpm-{native}/", str(directory))
+        served = site / "rpm" / native
+        served.mkdir(parents=True)
+        shutil.move(str(directory / "repodata"), str(served / "repodata"))
+        sign(served / "repodata" / "repomd.xml", fingerprint, armor=True)
 
 
 def make_archive(output, target):
@@ -202,11 +261,13 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--local-dir", type=Path,
+                        help="build from packages already on disk instead of a published release")
     args = parser.parse_args()
     version_tuple(args.version)
     record_path = ROOT / "release.json"
     existing = json.loads(record_path.read_text()) if record_path.exists() else {}
-    if existing.get("version") and version_tuple(existing["version"]) >= version_tuple(args.version):
+    if not args.local_dir and existing.get("version") and version_tuple(existing["version"]) >= version_tuple(args.version):
         print("The package repository already has this release or a newer one.")
         return
     fingerprint = (ROOT / "signing-key-fingerprint.txt").read_text().strip()
@@ -216,7 +277,11 @@ def main():
     if args.output.exists():
         raise ValueError("Repository output must be a new directory")
     args.output.mkdir(parents=True)
-    packages, source_digests = download_release(args.version, args.work_dir)
+    assets = args.work_dir / "release-assets"
+    assets.mkdir(parents=True, exist_ok=True)
+
+    packages, source_digests = (local_release(args.local_dir, args.version) if args.local_dir
+                                else download_release(args.version, args.work_dir))
     validate_packages(packages, args.version)
     public_key = run("gpg", "--batch", "--armor", "--export", fingerprint, capture=True)
     if not public_key:
@@ -224,23 +289,32 @@ def main():
     (args.output / "signing-key.asc").write_bytes(public_key)
     (args.output / "signing-key-fingerprint.txt").write_text(fingerprint + "\n")
     (args.output / ".nojekyll").touch()
-    build_apt(packages, args.output, fingerprint)
-    build_pacman(packages, args.output, fingerprint)
-    build_rpm(packages, args.output, fingerprint)
+    build_apt(packages, assets, fingerprint)
+    build_pacman(packages, assets, fingerprint)
+    build_rpm(packages, args.output, assets, fingerprint)
     shutil.copytree(ROOT / "config", args.output / "config")
-    if sum(f.stat().st_size for f in args.output.rglob("*") if f.is_file()) > 950_000_000:
-        raise ValueError("Package repository exceeds the Pages size budget")
+
+    # Only repodata, the public key and the setup files are hosted. Anything
+    # bigger means a package leaked into the served site.
+    hosted = sum(f.stat().st_size for f in args.output.rglob("*") if f.is_file())
+    if hosted > 20_000_000:
+        raise ValueError(f"Hosted metadata is far larger than expected: {hosted} bytes")
+    if any(f.name.endswith((".deb", ".rpm", ".pkg.tar.zst")) for f in args.output.rglob("*")):
+        raise ValueError("Package payloads must never be hosted")
+
     archive = args.work_dir / f"linux-packages-{args.version}.tar.gz"
     make_archive(args.output, archive)
+    published = {tag.name: sorted(f.name for f in tag.iterdir())
+                 for tag in sorted(assets.iterdir()) if tag.is_dir()}
     record = {"schema": 1, "version": args.version, "source": f"https://github.com/{SOURCE}/releases/tag/v{args.version}",
               "signing_fingerprint": fingerprint, "archive": archive.name, "sha256": checksum(archive),
-              "source_checksums": source_digests}
+              "source_checksums": source_digests, "hosted_bytes": hosted, "published": published}
     record_path.write_text(json.dumps(record, indent=2) + "\n")
     readme = ROOT / "README.md"
     readme.write_text(readme.read_text().replace(
         "The first signed package publication is pending. The setup URLs below become available after that publication succeeds.",
         "Signed packages are published below. Complete the one-time setup for your distribution, then use its normal package manager."))
-    print(f"Built signed package repository for {args.version}")
+    print(f"Built signed package repository for {args.version}: {hosted} bytes hosted")
 
 
 if __name__ == "__main__":

@@ -91,15 +91,31 @@ coverage are documented in the [application repository](https://github.com/Vapou
 4. `thecoolraven[bot]` commits `release.json`, pushes it here, and publishes the
    signed repository archive as a GitHub Release. An older job cannot overwrite
    a newer version.
-5. The release event deploys the archive to GitHub Pages after verifying the
-   checksum pinned in that commit. Deployment always uses the current main
-   record so delayed events cannot roll the repository back.
+5. The release event deploys the hosted metadata after verifying the checksum
+   pinned in that commit. Deployment always uses the current main record so
+   delayed events cannot roll the repository back.
+
+## What is actually hosted
+
+Almost nothing. apt and pacman both support a *flat* repository — one directory,
+no `dists/` or `pool/` hierarchy — so their indexes, signatures and packages are
+published as GitHub release assets under fixed tags (`repo-apt`,
+`repo-arch-$arch`) and read straight from there. An installed configuration
+keeps working because those tags never change name.
+
+dnf is the exception: it always looks for `<baseurl>/repodata/repomd.xml`, a
+directory path that a release asset name cannot express. So its repodata alone
+is served from Pages, while `createrepo_c --baseurl` writes an `xml:base` that
+sends dnf to the release for the packages themselves.
+
+The result is a few hundred kilobytes of hosted metadata. No package byte is
+ever served from Pages, which keeps the repository clear of its size and
+bandwidth limits. The build refuses to publish if a package reaches the hosted
+site or the metadata grows unexpectedly large.
 
 Only the source code, configuration, public signing-key fingerprint and release
-record belong in Git. Binaries and generated metadata are deployment artifacts;
-versioned archives stay in GitHub Releases. GitHub Pages serves the current
-release, with a size check before publishing. If a package download races a
-repository update, refresh your package-manager indexes and retry.
+record belong in Git. If a package download races a repository update, refresh
+your package-manager indexes and retry.
 
 The package signing secret is stored as `LINUX_PACKAGE_SIGNING_KEY` in the
 **sshclient** repository. The existing `THECOOLRAVEN_APP_ID` and
@@ -107,10 +123,11 @@ The package signing secret is stored as `LINUX_PACKAGE_SIGNING_KEY` in the
 of those private keys. Its publishing workflow uses GitHub's Pages deployment
 permissions and makes no Git commits.
 
-The signing key expires after two years. Renew the same key before expiry,
-replace its Actions secret, and republish so clients can refresh the public key.
-If rotating to a different key, update the pinned fingerprint and publish clear
-migration instructions; clients must explicitly trust the replacement.
+The signing key does not expire. Rotating a package signing key is disruptive —
+every machine that completed the setup above must explicitly trust the
+replacement — so treat the private key as long-lived and keep an offline backup.
+If it must be rotated, update the pinned fingerprint, republish, and publish
+clear migration instructions alongside the change.
 
 ## Testing
 

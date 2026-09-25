@@ -53,7 +53,9 @@ class ArchiveValidation(unittest.TestCase):
         with tarfile.open(file, "w:gz") as archive:
             for name, content in {"signing-key.asc": b"demo-public-key",
                                   "signing-key-fingerprint.txt": b"A" * 40,
-                                  "apt/dists/stable/InRelease": b"demo-index"}.items():
+                                  "rpm/x86_64/repodata/repomd.xml": b"demo-index",
+                                  "rpm/x86_64/repodata/repomd.xml.asc": b"demo-sig",
+                                  "rpm/aarch64/repodata/repomd.xml": b"demo-index"}.items():
                 info = tarfile.TarInfo(name)
                 info.size = len(content)
                 archive.addfile(info, io.BytesIO(content))
@@ -65,7 +67,7 @@ class ArchiveValidation(unittest.TestCase):
     def test_archive_extraction_and_fingerprint(self):
         archive, record = self.archive()
         unpack(archive, self.root / "site", record)
-        self.assertTrue((self.root / "site/apt/dists/stable/InRelease").is_file())
+        self.assertTrue((self.root / "site/rpm/x86_64/repodata/repomd.xml").is_file())
 
     def test_corrupt_archive_is_rejected_before_extraction(self):
         archive, record = self.archive()
@@ -104,17 +106,25 @@ class NativeRepositories(unittest.TestCase):
                 fingerprint = next(line.split(":")[9] for line in keys.splitlines() if line.startswith("fpr:"))
                 packages = self.create_packages(root)
                 build.validate_packages(packages, "1.2.3")
-                site = root / "site"
+                site, assets = root / "site", root / "assets"
                 site.mkdir()
+                assets.mkdir()
                 public_key = site / "signing-key.asc"
                 public_key.write_bytes(build.run("gpg", "--batch", "--armor", "--export", fingerprint, capture=True))
-                build.build_apt(packages, site, fingerprint)
-                build.build_pacman(packages, site, fingerprint)
-                build.build_rpm(packages, site, fingerprint)
-                self.check_apt(root, site, public_key)
-                self.check_pacman(root, site)
-                self.check_rpm(root, site, public_key)
-                self.assertFalse(any(file.is_symlink() for file in site.rglob("*")))
+                build.build_apt(packages, assets, fingerprint)
+                build.build_pacman(packages, assets, fingerprint)
+                build.build_rpm(packages, site, assets, fingerprint)
+
+                self.check_apt(root, assets, public_key)
+                self.check_pacman(root, assets)
+                self.check_rpm(root, assets, public_key)
+                # Release assets are plain files, and only dnf's repodata plus
+                # the public key may ever be hosted.
+                self.assertFalse(any(f.is_symlink() for f in assets.rglob("*")))
+                self.assertFalse([f for f in site.rglob("*") if f.name.endswith((".deb", ".rpm", ".pkg.tar.zst"))],
+                                 "no package may be served from the hosted site")
+                self.assertTrue((site / "rpm/x86_64/repodata/repomd.xml.asc").is_file())
+                self.assertLess(sum(f.stat().st_size for f in site.rglob("*") if f.is_file()), 20_000_000)
             finally:
                 subprocess.run(["gpgconf", "--kill", "gpg-agent"], check=False)
                 if previous is None:
@@ -164,11 +174,13 @@ echo demo > %{{buildroot}}/usr/share/sshclient/demo.txt
             packages[arch] = {kind: work / name for kind, name in assets.items()}
         return packages
 
-    def check_apt(self, root, site, key):
+    def check_apt(self, root, assets, key):
         lists = root / "apt-lists"
         (lists / "partial").mkdir(parents=True)
         source = root / "demo.list"
-        source.write_text(f"deb [signed-by={key}] file:{site}/apt stable main\n")
+        # Flat repository: a trailing-slash URI and "./" instead of a suite and
+        # components. This is what lets apt read a repo out of release assets.
+        source.write_text(f"deb [signed-by={key}] file:{assets}/{build.APT_TAG}/ ./\n")
         settings = {"Dir::Etc::sourcelist": str(source), "Dir::Etc::sourceparts": "-",
                     "Dir::State::lists": str(lists), "Dir::State::status": "/dev/null",
                     "Dir::Cache": str(root / "apt-cache"), "Debug::NoLocking": "1", "APT::Architecture": "amd64"}
@@ -176,22 +188,31 @@ echo demo > %{{buildroot}}/usr/share/sshclient/demo.txt
         build.run("apt-get", *options, "update")
         policy = build.run("apt-cache", *options, "policy", "sshclient", capture=True).decode()
         self.assertIn("Candidate: 1.2.3", policy)
+        # Prove the bare Filename: resolves — this is the rewrite that makes a
+        # flat repo work against a release download URL with no directories.
+        build.run("apt-get", *options, "download", "sshclient", cwd=root)
+        self.assertTrue(list(root.glob("sshclient*.deb")), "apt could not fetch from the flat repository")
 
-    def check_pacman(self, root, site):
+    def check_pacman(self, root, assets):
         for names in build.ARCHES.values():
-            db = root / f"pacman-{names['native']}"
+            native = names["native"]
+            directory = assets / f"repo-arch-{native}"
+            db = root / f"pacman-{native}"
             (db / "sync").mkdir(parents=True)
-            shutil.copy2(site / "arch" / names["native"] / "vapourware-studios.db", db / "sync/vapourware-studios.db")
+            shutil.copy2(directory / "vapourware-studios.db", db / "sync/vapourware-studios.db")
             config = db / "pacman.conf"
-            config.write_text(f"[options]\nArchitecture = {names['native']}\n[vapourware-studios]\nServer = file://{site}/arch/{names['native']}\n")
+            config.write_text(f"[options]\nArchitecture = {native}\n"
+                              f"[vapourware-studios]\nServer = file://{directory}\n")
             result = build.run("pacman", "--config", str(config), "--dbpath", str(db), "-Si", "sshclient", capture=True).decode()
             self.assertIn("1.2.3-1", result)
 
-    def check_rpm(self, root, site, key):
+    def check_rpm(self, root, assets, key):
         db = root / "rpmdb"
         db.mkdir()
         build.run("rpm", "--dbpath", str(db), "--import", str(key))
-        for package in (site / "rpm").rglob("*.rpm"):
+        found = list(assets.rglob("*.rpm"))
+        self.assertEqual(len(found), len(build.ARCHES), "each CPU publishes one signed RPM")
+        for package in found:
             result = build.run("rpmkeys", "--dbpath", str(db), "--checksig", str(package), capture=True).decode()
             self.assertIn("signatures OK", result)
 
