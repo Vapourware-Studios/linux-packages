@@ -23,14 +23,14 @@ gpg --show-keys --with-fingerprint vapourware-studios.asc
 Expected fingerprint:
 
 ```
-3C89AADAA804B642D3CD7408075B14EB2795823A
+30CA22DD01ECC0BE82FC9C4B31EBC3525661FEA1
 ```
 
 ### Arch / Manjaro
 
 ```bash
 sudo pacman-key --add vapourware-studios.asc
-sudo pacman-key --lsign-key 3C89AADAA804B642D3CD7408075B14EB2795823A
+sudo pacman-key --lsign-key 30CA22DD01ECC0BE82FC9C4B31EBC3525661FEA1
 curl -fSLo vapourware-studios.pacman https://vapourware-studios.github.io/linux-packages/config/vapourware-studios.pacman
 sudo install -m 644 vapourware-studios.pacman /etc/pacman.d/vapourware-studios
 ```
