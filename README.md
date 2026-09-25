@@ -16,7 +16,7 @@ distributions' default repositories.
 Download the public signing key and check its fingerprint before installing it:
 
 ```bash
-curl -fSLo vapourware-studios.asc https://packages.vapourware-studios.net/signing-key.asc
+curl -fSLo vapourware-studios.asc https://vapourware-studios.github.io/linux-packages/signing-key.asc
 gpg --show-keys --with-fingerprint vapourware-studios.asc
 ```
 
@@ -31,7 +31,7 @@ Expected fingerprint:
 ```bash
 sudo pacman-key --add vapourware-studios.asc
 sudo pacman-key --lsign-key 3C89AADAA804B642D3CD7408075B14EB2795823A
-curl -fSLo vapourware-studios.pacman https://packages.vapourware-studios.net/config/vapourware-studios.pacman
+curl -fSLo vapourware-studios.pacman https://vapourware-studios.github.io/linux-packages/config/vapourware-studios.pacman
 sudo install -m 644 vapourware-studios.pacman /etc/pacman.d/vapourware-studios
 ```
 
@@ -52,7 +52,7 @@ sudo pacman -Syu sshclient
 ```bash
 sudo install -d -m 755 /usr/share/keyrings
 sudo install -m 644 vapourware-studios.asc /usr/share/keyrings/vapourware-studios.asc
-curl -fSLo vapourware-studios.sources https://packages.vapourware-studios.net/config/vapourware-studios.sources
+curl -fSLo vapourware-studios.sources https://vapourware-studios.github.io/linux-packages/config/vapourware-studios.sources
 sudo install -m 644 vapourware-studios.sources /etc/apt/sources.list.d/vapourware-studios.sources
 sudo apt update
 sudo apt install sshclient
@@ -62,7 +62,7 @@ sudo apt install sshclient
 
 ```bash
 sudo rpm --import vapourware-studios.asc
-curl -fSLo vapourware-studios.repo https://packages.vapourware-studios.net/config/vapourware-studios.repo
+curl -fSLo vapourware-studios.repo https://vapourware-studios.github.io/linux-packages/config/vapourware-studios.repo
 sudo install -m 644 vapourware-studios.repo /etc/yum.repos.d/vapourware-studios.repo
 sudo dnf install sshclient
 ```
@@ -71,7 +71,7 @@ sudo dnf install sshclient
 
 ```bash
 sudo rpm --import vapourware-studios.asc
-sudo zypper addrepo --refresh https://packages.vapourware-studios.net/config/vapourware-studios.repo
+sudo zypper addrepo --refresh https://vapourware-studios.github.io/linux-packages/config/vapourware-studios.repo
 sudo zypper refresh
 sudo zypper install sshclient
 ```
@@ -91,40 +91,26 @@ coverage are documented in the [application repository](https://github.com/Vapou
 4. `thecoolraven[bot]` commits `release.json`, pushes it here, and publishes the
    signed repository archive as a GitHub Release. An older job cannot overwrite
    a newer version.
-5. The release event deploys the signed metadata to
-   `packages.vapourware-studios.net` after verifying the checksum pinned in that
-   commit. Deployment always uses the current main record so delayed events
-   cannot roll the repository back.
+5. The release event deploys the archive to GitHub Pages after verifying the
+   checksum pinned in that commit. Deployment always uses the current main
+   record so delayed events cannot roll the repository back.
 
-## What is actually served
-
-Only signed metadata is hosted: the package indexes, their signatures and the
-public key, well under a megabyte per release. Package files are not copied
-anywhere. The repository ships a `manifest.json` mapping each payload path to
-the release that already holds those bytes, and the worker answers requests for
-them with a redirect. Every package manager follows redirects, and the
-signatures cover the content rather than its location, so this changes where
-bytes come from and nothing about what is verified.
-
-Debian and Arch packages redirect to the application release, byte-for-byte as
-it built them. `rpmsign --addsign` rewrites an RPM to embed its signature, so
-the checksum recorded in the RPM index only matches the signed copy; those are
-republished on this repository's own release and redirect there instead.
-
-Only source, configuration, the pinned fingerprint and the release record belong
-in Git. If a package download races a repository update, refresh your
-package-manager indexes and retry.
+Only the source code, configuration, public signing-key fingerprint and release
+record belong in Git. Binaries and generated metadata are deployment artifacts;
+versioned archives stay in GitHub Releases. GitHub Pages serves the current
+release, with a size check before publishing. If a package download races a
+repository update, refresh your package-manager indexes and retry.
 
 The package signing secret is stored as `LINUX_PACKAGE_SIGNING_KEY` in the
 **sshclient** repository. The existing `THECOOLRAVEN_APP_ID` and
 `THECOOLRAVEN_PRIVATE_KEY` secrets are reused there. This repository needs no copy
-of those private keys.
+of those private keys. Its publishing workflow uses GitHub's Pages deployment
+permissions and makes no Git commits.
 
-The signing key does not expire. Rotating a package signing key is disruptive —
-every machine that completed the setup above must explicitly trust the
-replacement — so treat the private key as long-lived and keep an offline backup.
-If it must be rotated, update the pinned fingerprint, republish, and publish
-clear migration instructions alongside the change.
+The signing key expires after two years. Renew the same key before expiry,
+replace its Actions secret, and republish so clients can refresh the public key.
+If rotating to a different key, update the pinned fingerprint and publish clear
+migration instructions; clients must explicitly trust the replacement.
 
 ## Testing
 

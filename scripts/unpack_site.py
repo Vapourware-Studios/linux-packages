@@ -28,24 +28,11 @@ def unpack(archive, destination, record):
             if path.is_absolute() or ".." in path.parts or not member.isfile() or member.name in names:
                 raise ValueError("Repository archive contains an unsafe or duplicate entry")
             names.add(member.name)
-        if sum(m.size for m in members) > 20_000_000:
+        if sum(m.size for m in members) > 950_000_000:
             raise ValueError("Repository archive exceeds the deployment size budget")
-        required = {"signing-key.asc", "signing-key-fingerprint.txt",
-                    "apt/dists/stable/InRelease", "manifest.json"}
+        required = {"signing-key.asc", "signing-key-fingerprint.txt", "apt/dists/stable/InRelease"}
         if not required.issubset(names):
             raise ValueError("Repository archive is incomplete")
-        # Payloads are served by redirect, never from the worker's own assets.
-        if any(name.endswith((".deb", ".rpm", ".pkg.tar.zst")) for name in names):
-            raise ValueError("Repository archive must not contain package payloads")
-        # Check the redirect map before anything reaches the deployment
-        # directory, so a bad target can never be served even briefly.
-        manifest = json.loads(source.extractfile("manifest.json").read())
-        if manifest.get("version") != record["version"] or not manifest.get("redirects"):
-            raise ValueError("The redirect map does not match the release record")
-        for target in manifest["redirects"].values():
-            if not re.fullmatch(r"https://github\.com/Vapourware-Studios/(?:sshclient|linux-packages)"
-                                r"/releases/download/v[0-9.]+/[^/\s]+", target):
-                raise ValueError(f"Redirect leaves the project's releases: {target}")
         source.extractall(destination, members=members, filter="data")
     fingerprint = (Path(destination) / "signing-key-fingerprint.txt").read_text().strip()
     if fingerprint != record.get("signing_fingerprint"):

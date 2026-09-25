@@ -27,14 +27,4 @@ if record.get("source") != f"https://github.com/Vapourware-Studios/sshclient/rel
 for filename, checksum in record.get("source_checksums", {}).items():
     if not re.fullmatch(r"sshclient-[0-9.]+-linux-[a-z0-9_]+\.(?:deb|rpm|pkg\.tar\.zst)", filename) or not re.fullmatch(r"[a-f0-9]{64}", checksum):
         raise SystemExit("Invalid source package record")
-if not isinstance(record.get("redirects"), int) or record["redirects"] < 1:
-    raise SystemExit("Release records no package redirects")
-# rpmsign rewrites the RPM, so the signed copies are republished here and must
-# be recorded with the checksums the repository metadata actually indexes.
-signed = record.get("signed_rpms") or {}
-if not signed:
-    raise SystemExit("Release records no signed RPMs")
-for filename, checksum in signed.items():
-    if not re.fullmatch(r"sshclient-[0-9.]+-linux-[a-z0-9_]+\.rpm", filename) or not re.fullmatch(r"[a-f0-9]{64}", checksum):
-        raise SystemExit("Invalid signed RPM record")
 print("Staged release privacy and identity checks passed")
