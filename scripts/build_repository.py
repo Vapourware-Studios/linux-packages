@@ -212,7 +212,7 @@ def build_pacman(packages, assets, fingerprint):
         package = directory / formats["pacman"].name
         shutil.copy2(formats["pacman"], package)
         sign(package, fingerprint)
-        run("repo-add", "--include-sigs", "--sign", "--key", fingerprint,
+        run("repo-add", "--sign", "--key", fingerprint,
             str(directory / f"{REPO_NAME}.db.tar.gz"), str(package))
         # Release assets are plain files; resolve repo-add's symlinks.
         for link in directory.iterdir():
