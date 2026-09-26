@@ -1,0 +1,132 @@
+name: Verify published Linux installs
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Expected installed version (without v)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:22.04
+            family: apt
+          - image: ubuntu:24.04
+            family: apt
+          - image: debian:12
+            family: apt
+          - image: debian:13
+            family: apt
+          - image: archlinux:base-devel
+            family: pacman
+          - image: fedora:latest
+            family: dnf
+          - image: opensuse/tumbleweed:latest
+            family: zypper
+    name: Install on ${{ matrix.image }}
+    runs-on: ubuntu-22.04
+    container:
+      image: ${{ matrix.image }}
+      options: --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+    env:
+      FAMILY: ${{ matrix.family }}
+      EXPECTED_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$FAMILY" in
+            apt)
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg xvfb xauth dbus-x11 desktop-file-utils
+              ;;
+            pacman)
+              pacman -Syu --noconfirm --needed ca-certificates curl gnupg xorg-server-xvfb xorg-xauth dbus desktop-file-utils
+              ;;
+            dnf)
+              dnf install -y curl-minimal gnupg2 xorg-x11-server-Xvfb xorg-x11-xauth dbus-daemon shadow-utils desktop-file-utils
+              ;;
+            zypper)
+              zypper --non-interactive install curl ca-certificates gpg2 xorg-x11-server-Xvfb xauth dbus-1 shadow desktop-file-utils
+              ;;
+          esac
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify public key and install through the signed repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=https://raw.githubusercontent.com/Vapourware-Studios/linux-packages/main
+          curl --retry 3 -fSLo /tmp/vapourware-studios.asc "$BASE/signing-key.asc"
+          FINGERPRINT=$(gpg --batch --with-colons --show-keys /tmp/vapourware-studios.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          test "$FINGERPRINT" = "$(cat signing-key-fingerprint.txt)"
+          case "$FAMILY" in
+            apt)
+              install -m 644 /tmp/vapourware-studios.asc /usr/share/keyrings/vapourware-studios.asc
+              install -m 644 config/vapourware-studios.sources /etc/apt/sources.list.d/vapourware-studios.sources
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y sshclient
+              INSTALLED=$(dpkg-query -W -f='${Version}' sshclient)
+              ;;
+            pacman)
+              pacman-key --init
+              pacman-key --add /tmp/vapourware-studios.asc
+              pacman-key --lsign-key "$FINGERPRINT"
+              cat config/vapourware-studios.pacman >> /etc/pacman.conf
+              pacman -Syu --noconfirm sshclient
+              INSTALLED=$(pacman -Q sshclient | awk '{ print $2 }')
+              INSTALLED=${INSTALLED%-1}
+              ;;
+            dnf)
+              rpm --import /tmp/vapourware-studios.asc
+              install -m 644 config/vapourware-studios.repo /etc/yum.repos.d/vapourware-studios.repo
+              dnf install -y sshclient
+              INSTALLED=$(rpm -q --qf '%{VERSION}' sshclient)
+              ;;
+            zypper)
+              rpm --import /tmp/vapourware-studios.asc
+              zypper --non-interactive addrepo --refresh "$BASE/config/vapourware-studios.repo"
+              zypper --non-interactive --gpg-auto-import-keys refresh
+              zypper --non-interactive install sshclient
+              INSTALLED=$(rpm -q --qf '%{VERSION}' sshclient)
+              ;;
+          esac
+          test "$INSTALLED" = "$EXPECTED_VERSION"
+          command -v sshclient
+          desktop-file-validate /usr/share/applications/sshclient.desktop
+      - name: Launch the installed application as an unprivileged desktop user
+        shell: bash
+        run: |
+          set -euo pipefail
+          useradd --create-home demo
+          set +e
+          runuser -u demo -- timeout 15s xvfb-run -a dbus-run-session -- sshclient > /tmp/sshclient-launch.log 2>&1
+          RESULT=$?
+          set -e
+          cat /tmp/sshclient-launch.log
+          # Staying open until timeout is expected for the vault's first-run UI.
+          test "$RESULT" -eq 124
+          if grep -E 'Error:|FATAL:|error while loading shared libraries|MODULE_NOT_FOUND' /tmp/sshclient-launch.log; then
+            exit 1
+          fi
+      - name: Verify removal through the package manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$FAMILY" in
+            apt) apt-get remove -y sshclient ;;
+            pacman) pacman -R --noconfirm sshclient ;;
+            dnf) dnf remove -y sshclient ;;
+            zypper) zypper --non-interactive remove sshclient ;;
+          esac
+          ! command -v sshclient

@@ -18,6 +18,6 @@ jobs:
       - name: Install native package tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y apt-utils dpkg-dev rpm createrepo-c pacman-package-manager libarchive-tools zstd gnupg
+          sudo apt-get install -y apt-utils dpkg-dev rpm createrepo-c pacman-package-manager libarchive-tools zstd gnupg dnf dnf-plugins-core
       - name: Test signatures and package-manager indexes
         run: python3 -m unittest discover -s test -v
