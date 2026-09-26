@@ -10,13 +10,23 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from functools import partial
+import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import build_repository as build
-from unpack_site import unpack
+import publish_repository as publish
 
 
 class ReleaseValidation(unittest.TestCase):
+    def test_first_publication_retries_and_rollback(self):
+        self.assertTrue(build.should_publish(None, "1.2.3"))
+        self.assertTrue(build.should_publish("1.2.2", "1.2.3"))
+        self.assertFalse(build.should_publish("1.2.3", "1.2.3"))
+        self.assertFalse(build.should_publish("1.2.4", "1.2.3"))
+
     def test_architecture_names_match_release_packages(self):
         files = build.expected_assets("1.2.3")
         self.assertEqual(files["x64"]["deb"], "sshclient-1.2.3-linux-amd64.deb")
@@ -42,53 +52,34 @@ class ReleaseValidation(unittest.TestCase):
             build.fetch("https://example.com/demo.deb", Path("unused"))
 
 
-class ArchiveValidation(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+class PublicationValidation(unittest.TestCase):
+    def test_upload_failure_is_not_marked_complete(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            directory = assets / "repo-apt"
+            directory.mkdir()
+            (directory / "demo.deb").write_bytes(b"demo")
+            (directory / "InRelease").write_bytes(b"signed index")
+            calls = []
+            def invoke(*args, **kwargs):
+                calls.append(args)
+                if "upload" in args:
+                    raise RuntimeError("interrupted upload")
+            with mock.patch.object(publish.subprocess, "run", return_value=mock.Mock(returncode=0)):
+                with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                    publish.publish_assets(assets, invoke)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("demo.deb", calls[0][4])
+            self.assertFalse(any("edit" in call or "commit" in call for call in calls))
 
-    def archive(self, extra=None):
-        file = self.root / "linux-packages-1.2.3.tar.gz"
-        with tarfile.open(file, "w:gz") as archive:
-            for name, content in {"signing-key.asc": b"demo-public-key",
-                                  "signing-key-fingerprint.txt": b"A" * 40,
-                                  "rpm/x86_64/repodata/repomd.xml": b"demo-index",
-                                  "rpm/x86_64/repodata/repomd.xml.asc": b"demo-sig",
-                                  "rpm/aarch64/repodata/repomd.xml": b"demo-index"}.items():
-                info = tarfile.TarInfo(name)
-                info.size = len(content)
-                archive.addfile(info, io.BytesIO(content))
-            if extra:
-                archive.addfile(extra)
-        record = {"version": "1.2.3", "archive": file.name, "sha256": build.checksum(file), "signing_fingerprint": "A" * 40}
-        return file, record
-
-    def test_archive_extraction_and_fingerprint(self):
-        archive, record = self.archive()
-        unpack(archive, self.root / "site", record)
-        self.assertTrue((self.root / "site/rpm/x86_64/repodata/repomd.xml").is_file())
-
-    def test_corrupt_archive_is_rejected_before_extraction(self):
-        archive, record = self.archive()
-        archive.write_bytes(archive.read_bytes() + b"corrupted")
-        with self.assertRaisesRegex(ValueError, "SHA-256"):
-            unpack(archive, self.root / "site", record)
-        self.assertFalse((self.root / "site").exists())
-
-    def test_links_and_path_escapes_are_rejected(self):
-        for name, kind in (("../escape", tarfile.REGTYPE), ("/absolute", tarfile.REGTYPE), ("link", tarfile.SYMTYPE)):
-            with self.subTest(name=name):
-                info = tarfile.TarInfo(name)
-                info.type = kind
-                info.linkname = "/demo"
-                archive, record = self.archive(info)
-                with self.assertRaisesRegex(ValueError, "unsafe"):
-                    unpack(archive, self.root / "site", record)
+    def test_indexes_are_uploaded_after_packages_and_inrelease_last(self):
+        names = ["InRelease", "Packages.gz", "demo.deb", "Release.gpg"]
+        self.assertEqual([p.name for p in sorted(map(Path, names), key=publish.upload_order)],
+                         ["demo.deb", "Packages.gz", "Release.gpg", "InRelease"])
 
 
 NATIVE_TOOLS = ("dpkg-deb", "dpkg-scanpackages", "apt-ftparchive", "apt-get", "apt-cache",
-                "rpm", "rpmbuild", "rpmsign", "rpmkeys", "createrepo_c", "repo-add", "pacman", "gpg", "bsdtar")
+                "dnf", "rpm", "rpmbuild", "rpmsign", "rpmkeys", "createrepo_c", "repo-add", "pacman", "gpg", "bsdtar")
 
 
 @unittest.skipUnless(all(shutil.which(tool) for tool in NATIVE_TOOLS), "Native packaging toolchain is required")
@@ -113,7 +104,15 @@ class NativeRepositories(unittest.TestCase):
                 public_key.write_bytes(build.run("gpg", "--batch", "--armor", "--export", fingerprint, capture=True))
                 build.build_apt(packages, assets, fingerprint)
                 build.build_pacman(packages, assets, fingerprint)
-                build.build_rpm(packages, site, assets, fingerprint)
+                server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(root)))
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                self.addCleanup(server.server_close)
+                self.addCleanup(server.shutdown)
+                base = f"http://127.0.0.1:{server.server_port}"
+                with mock.patch.object(build, "DOWNLOAD", base + "/assets"):
+                    build.build_rpm(packages, site, assets, fingerprint, "1.2.3")
+                self.check_dnf(root, base, public_key)
 
                 self.check_apt(root, assets, public_key)
                 self.check_pacman(root, assets)
@@ -160,7 +159,6 @@ Version: 1.2.3
 Release: 1
 Summary: demo package
 License: GPL-3.0-only
-BuildArch: {names['native']}
 %description
 demo package
 %install
@@ -205,6 +203,21 @@ echo demo > %{{buildroot}}/usr/share/sshclient/demo.txt
                               f"[vapourware-studios]\nServer = file://{directory}\n")
             result = build.run("pacman", "--config", str(config), "--dbpath", str(db), "-Si", "sshclient", capture=True).decode()
             self.assertIn("1.2.3-1", result)
+
+    def check_dnf(self, root, base, key):
+        config = root / "dnf.conf"
+        config.write_text(f"[main]\nreposdir={root}/no-repos\ncachedir={root}/dnf-cache\n"
+                          f"persistdir={root}/dnf-state\nlogdir={root}/logs\n"
+                          f"[demo]\nname=demo\nbaseurl={base}/site/rpm/x86_64/\n"
+                          f"gpgkey=file://{key}\ngpgcheck=1\nrepo_gpgcheck=1\n")
+        destination = root / "downloaded"
+        destination.mkdir()
+        build.run("dnf", "-y", "--config", str(config), "--releasever=1", "--forcearch=x86_64",
+                  "download", "--destdir", str(destination), "sshclient")
+        files = list(destination.glob("*.rpm"))
+        self.assertEqual(len(files), 1)
+        original = root / "assets/v1.2.3" / files[0].name
+        self.assertEqual(build.checksum(files[0]), build.checksum(original))
 
     def check_rpm(self, root, assets, key):
         db = root / "rpmdb"

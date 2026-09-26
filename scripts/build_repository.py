@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""Build signed native repositories from a complete SSH Client release.
-
-Almost nothing is hosted. apt and pacman both support a flat repository — one
-directory, no `dists/` or `pool/` hierarchy — so their indexes and packages are
-published as GitHub release assets and fetched straight from there. Only dnf
-insists on `<baseurl>/repodata/repomd.xml`, a real directory path that release
-asset names cannot express, so its repodata alone is served from Pages while
-`createrepo_c --baseurl` points dnf at the release for the packages themselves.
-
-The result is a few hundred kilobytes of hosted metadata instead of hundreds of
-megabytes of packages, and no package byte is ever served from Pages.
-"""
+"""Build signed repositories: release assets for apt/pacman, raw Git for RPM metadata."""
 import argparse
 import gzip
 import hashlib
@@ -19,7 +8,6 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import tarfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -138,6 +126,21 @@ def sign(file, fingerprint, *, armor=False, clear=False, output=None):
     return target
 
 
+def validate_public_key(key, fingerprint):
+    details = run("gpg", "--batch", "--with-colons", "--import-options", "show-only", "--import",
+                  input=key, capture=True).decode()
+    fields = [line.split(":") for line in details.splitlines()]
+    if any(row[0] in ("sec", "ssb") for row in fields):
+        raise ValueError("A private key must never be published")
+    fingerprints = [row[9] for row in fields if row[0] == "fpr"]
+    identities = [row[9] for row in fields if row[0] == "uid"]
+    if not fingerprints or fingerprints[0] != fingerprint or not identities:
+        raise ValueError("Public signing key does not match the pinned fingerprint")
+    for identity in identities:
+        if not re.fullmatch(r"Vapourware-Studios(?: Linux Packages)?(?: <(?:noreply@vapourware-studios\.net|306463211\+thecoolraven\[bot\]@users\.noreply\.github\.com)>)?", identity):
+            raise ValueError("Public signing key identity must use the organization and its noreply address")
+
+
 def read_pkginfo(package):
     text = run("bsdtar", "-xOf", str(package), ".PKGINFO", capture=True).decode()
     result = {}
@@ -220,40 +223,31 @@ def build_pacman(packages, assets, fingerprint):
         run("gpg", "--batch", "--verify", str(directory / f"{REPO_NAME}.db.sig"), str(directory / f"{REPO_NAME}.db"))
 
 
-def build_rpm(packages, site, assets, fingerprint):
-    """RPM packages go to a release; only repodata is hosted.
-
-    dnf always looks for `<baseurl>/repodata/repomd.xml`, which a flat release
-    cannot provide, so repodata is served from Pages. `--baseurl` writes an
-    xml:base into the index so the packages themselves still come from the
-    release. rpmsign rewrites the package, so the copy indexed here is the copy
-    that gets published.
-    """
+def build_rpm(packages, site, assets, fingerprint, version):
+    """Keep RPM metadata in Git and signed package bytes in a versioned release."""
     for arch, formats in packages.items():
         native = ARCHES[arch]["native"]
-        directory = assets / f"repo-rpm-{native}"
-        directory.mkdir(parents=True)
+        directory = assets / f"v{version}"
+        directory.mkdir(parents=True, exist_ok=True)
         package = directory / formats["rpm"].name
         shutil.copy2(formats["rpm"], package)
         run("rpmsign", "--define", f"_gpg_name {fingerprint}", "--define", "_gpg_digest_algo sha256",
             "--define", "__gpg /usr/bin/gpg", "--addsign", str(package))
+        staging = site / f"staging-{native}"
+        staging.mkdir()
+        shutil.copy2(package, staging)
         run("createrepo_c", "--checksum", "sha256", "--no-database",
-            "--baseurl", f"{DOWNLOAD}/repo-rpm-{native}/", str(directory))
+            "--baseurl", f"{DOWNLOAD}/v{version}/", str(staging))
         served = site / "rpm" / native
         served.mkdir(parents=True)
-        shutil.move(str(directory / "repodata"), str(served / "repodata"))
+        shutil.move(str(staging / "repodata"), str(served / "repodata"))
+        shutil.rmtree(staging)
         sign(served / "repodata" / "repomd.xml", fingerprint, armor=True)
 
 
-def make_archive(output, target):
-    def neutral_metadata(info):
-        info.uid = info.gid = 0
-        info.uname = info.gname = ""
-        return info
-    with tarfile.open(target, "w:gz", compresslevel=1) as archive:
-        for file in sorted(output.rglob("*")):
-            if file.is_file():
-                archive.add(file, arcname=file.relative_to(output), filter=neutral_metadata)
+def should_publish(current, requested):
+    """A completed record is committed only after every upload succeeds."""
+    return not current or version_tuple(current) < version_tuple(requested)
 
 
 def main():
@@ -265,11 +259,6 @@ def main():
                         help="build from packages already on disk instead of a published release")
     args = parser.parse_args()
     version_tuple(args.version)
-    record_path = ROOT / "release.json"
-    existing = json.loads(record_path.read_text()) if record_path.exists() else {}
-    if not args.local_dir and existing.get("version") and version_tuple(existing["version"]) >= version_tuple(args.version):
-        print("The package repository already has this release or a newer one.")
-        return
     fingerprint = (ROOT / "signing-key-fingerprint.txt").read_text().strip()
     if not re.fullmatch(r"[A-F0-9]{40}", fingerprint):
         raise ValueError("Invalid pinned package-signing fingerprint")
@@ -286,35 +275,37 @@ def main():
     public_key = run("gpg", "--batch", "--armor", "--export", fingerprint, capture=True)
     if not public_key:
         raise ValueError("The pinned package-signing key is not available")
+    validate_public_key(public_key, fingerprint)
     (args.output / "signing-key.asc").write_bytes(public_key)
     (args.output / "signing-key-fingerprint.txt").write_text(fingerprint + "\n")
-    (args.output / ".nojekyll").touch()
     build_apt(packages, assets, fingerprint)
     build_pacman(packages, assets, fingerprint)
-    build_rpm(packages, args.output, assets, fingerprint)
-    shutil.copytree(ROOT / "config", args.output / "config")
+    build_rpm(packages, args.output, assets, fingerprint, args.version)
+    versioned = assets / f"v{args.version}"
+    for directory in list(assets.iterdir()):
+        if directory == versioned:
+            continue
+        for file in directory.iterdir():
+            if file.name.endswith((".deb", ".pkg.tar.zst", ".pkg.tar.zst.sig")):
+                shutil.copy2(file, versioned)
+    shutil.copy2(args.output / "signing-key.asc", versioned)
 
     # Only repodata, the public key and the setup files are hosted. Anything
-    # bigger means a package leaked into the served site.
+    # bigger means a package leaked into the metadata directory.
     hosted = sum(f.stat().st_size for f in args.output.rglob("*") if f.is_file())
     if hosted > 20_000_000:
         raise ValueError(f"Hosted metadata is far larger than expected: {hosted} bytes")
     if any(f.name.endswith((".deb", ".rpm", ".pkg.tar.zst")) for f in args.output.rglob("*")):
         raise ValueError("Package payloads must never be hosted")
 
-    archive = args.work_dir / f"linux-packages-{args.version}.tar.gz"
-    make_archive(args.output, archive)
-    published = {tag.name: sorted(f.name for f in tag.iterdir())
+    published = {tag.name: {f.name: checksum(f) for f in sorted(tag.iterdir()) if f.is_file()}
                  for tag in sorted(assets.iterdir()) if tag.is_dir()}
-    record = {"schema": 1, "version": args.version, "source": f"https://github.com/{SOURCE}/releases/tag/v{args.version}",
-              "signing_fingerprint": fingerprint, "archive": archive.name, "sha256": checksum(archive),
-              "source_checksums": source_digests, "hosted_bytes": hosted, "published": published}
-    record_path.write_text(json.dumps(record, indent=2) + "\n")
-    readme = ROOT / "README.md"
-    readme.write_text(readme.read_text().replace(
-        "The first signed package publication is pending. The setup URLs below become available after that publication succeeds.",
-        "Signed packages are published below. Complete the one-time setup for your distribution, then use its normal package manager."))
-    print(f"Built signed package repository for {args.version}: {hosted} bytes hosted")
+    record = {"schema": 2, "version": args.version,
+              "source": f"https://github.com/{SOURCE}/releases/tag/v{args.version}",
+              "signing_fingerprint": fingerprint, "source_checksums": source_digests,
+              "metadata_bytes": hosted, "published": published}
+    (args.work_dir / "release.json").write_text(json.dumps(record, indent=2) + "\n")
+    print(f"Built signed package repository for {args.version}: {hosted} bytes of metadata")
 
 
 if __name__ == "__main__":
