@@ -110,13 +110,19 @@ jobs:
           set -euo pipefail
           useradd --create-home demo
           set +e
-          runuser -u demo -- timeout 15s xvfb-run -a dbus-run-session -- sshclient > /tmp/sshclient-launch.log 2>&1
+          # The timeout runs inside the X and D-Bus session so the app is
+          # stopped while both are still up. Stopping the session first makes
+          # Chromium abort with FATAL lines about the lost bus.
+          runuser -u demo -- xvfb-run -a dbus-run-session -- timeout -k 10s 15s sshclient > /tmp/sshclient-launch.log 2>&1
           RESULT=$?
           set -e
           cat /tmp/sshclient-launch.log
           # Staying open until timeout is expected for the vault's first-run UI.
+          # A crash or a missing library ends it early with another status.
           test "$RESULT" -eq 124
-          if grep -E 'Error:|FATAL:|error while loading shared libraries|MODULE_NOT_FOUND' /tmp/sshclient-launch.log; then
+          # A bare container lacks desktop services, so Chromium and the portals
+          # log harmless "Error:" lines; match only failures of the app itself.
+          if grep -E 'error while loading shared libraries|symbol lookup error|MODULE_NOT_FOUND|A JavaScript error occurred|Uncaught Exception' /tmp/sshclient-launch.log; then
             exit 1
           fi
       - name: Verify removal through the package manager
