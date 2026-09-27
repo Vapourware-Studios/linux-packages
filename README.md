@@ -6,7 +6,7 @@ Packages and indexes use GitHub Releases and raw repository files. No website,
 GitHub Pages deployment, or shell installer is required.
 
 <!-- publication-status -->
-The first signed package publication is pending. The setup URLs below become available after that publication succeeds.
+Signed packages are available. Complete the one-time setup below, then use your normal package manager.
 
 Packages are built for x86-64 and ARM64 on glibc distributions. Alpine's `apk`
 is not supported by these builds. This is the project's own repository, separate

@@ -1,4 +1,61 @@
 {
-  "schema": 1,
-  "version": null
+  "schema": 2,
+  "version": "0.2.0",
+  "source": "https://github.com/Vapourware-Studios/sshclient/releases/tag/v0.2.0",
+  "signing_fingerprint": "7C01CAE212F0303542C62546FC8F47D2954BDB29",
+  "source_checksums": {
+    "sshclient-0.2.0-linux-amd64.deb": "1df42fd2b0bf8cfd66cbb0c1cf59f1cffcaf9f942193083d99a16bdb11903c36",
+    "sshclient-0.2.0-linux-x86_64.rpm": "af1a7c373f82e55d37ec6372a58312c77ff0d71dfb17d3c8ed8deb0773ebe750",
+    "sshclient-0.2.0-linux-x64.pkg.tar.zst": "13b9eb97b0af6d24b102285503888cadce6b274593b50d9747475ed75971c085",
+    "sshclient-0.2.0-linux-arm64.deb": "95ff7e90704c927b1cf56f9d6f5fa210de3816d36148af5d52e08c0eafb92351",
+    "sshclient-0.2.0-linux-aarch64.rpm": "4513fb526ed379f3b46c46dfd852d9b7e0c936679ae97221196a007925725d78",
+    "sshclient-0.2.0-linux-aarch64.pkg.tar.zst": "961241b0373a94455eb27a48693cb3ae5d89be5a0b2c6f6e60423ccdfff992b6"
+  },
+  "metadata_bytes": 16927,
+  "published": {
+    "repo-apt": {
+      "InRelease": "55d3b652d4de2dc294a6e1a4da21defbfc8258c06b7f2394c5cd761c33c5f055",
+      "Packages": "02e18e514492051965acd5fdc31670a6bfb44b2a17b78882a57e75a2635edc80",
+      "Packages.gz": "80154fc7738610ac86d8556dfc5b32b1f1bc10cc12d700d2b7d9c316dfcee644",
+      "Release": "f6932672819062be1f5c35693513e6bfa8ebc34fdf9bd7974cb587fe8d4b6fb7",
+      "Release.gpg": "c2249bdc59ea69db70c5672a1c3993e97080e485e24bfca0f3cc4d805dbe7197",
+      "sshclient-0.2.0-linux-amd64.deb": "1df42fd2b0bf8cfd66cbb0c1cf59f1cffcaf9f942193083d99a16bdb11903c36",
+      "sshclient-0.2.0-linux-arm64.deb": "95ff7e90704c927b1cf56f9d6f5fa210de3816d36148af5d52e08c0eafb92351"
+    },
+    "repo-arch-aarch64": {
+      "sshclient-0.2.0-linux-aarch64.pkg.tar.zst": "961241b0373a94455eb27a48693cb3ae5d89be5a0b2c6f6e60423ccdfff992b6",
+      "sshclient-0.2.0-linux-aarch64.pkg.tar.zst.sig": "a05045cca54cf5df14c45cfa5e0f30c0db703fea47116203f6ac969759db4d89",
+      "vapourware-studios.db": "5e94539dd51c7eb29404517885447f697e1d99cfc47383ff44b788a0c8df0f15",
+      "vapourware-studios.db.sig": "c30e7e2748e06638f2e69164e9e1ea9f7cd4844540a064c20df847d3b8cc877a",
+      "vapourware-studios.db.tar.gz": "5e94539dd51c7eb29404517885447f697e1d99cfc47383ff44b788a0c8df0f15",
+      "vapourware-studios.db.tar.gz.sig": "c30e7e2748e06638f2e69164e9e1ea9f7cd4844540a064c20df847d3b8cc877a",
+      "vapourware-studios.files": "f1c5bb578efaca53864010945dcd77d1b5bf4b3219d8646304d7b7c59fa8db31",
+      "vapourware-studios.files.sig": "4d4365ebeee88a730091fb88c4e7e262d4a0baa12c6a3f1761dcd611905a7f00",
+      "vapourware-studios.files.tar.gz": "f1c5bb578efaca53864010945dcd77d1b5bf4b3219d8646304d7b7c59fa8db31",
+      "vapourware-studios.files.tar.gz.sig": "4d4365ebeee88a730091fb88c4e7e262d4a0baa12c6a3f1761dcd611905a7f00"
+    },
+    "repo-arch-x86_64": {
+      "sshclient-0.2.0-linux-x64.pkg.tar.zst": "13b9eb97b0af6d24b102285503888cadce6b274593b50d9747475ed75971c085",
+      "sshclient-0.2.0-linux-x64.pkg.tar.zst.sig": "0840c4594a0cca446cdbce64f083834bcf7f5e11e2edcc4dade8e2d073e42891",
+      "vapourware-studios.db": "0f387ddb0d112eae691685972f7ad578fe7432788297168a4f95fe3268c0bed5",
+      "vapourware-studios.db.sig": "6b4a5799d36ad315c11b719b1f02153b90a834a1496b257ec0b2cf4cd205a377",
+      "vapourware-studios.db.tar.gz": "0f387ddb0d112eae691685972f7ad578fe7432788297168a4f95fe3268c0bed5",
+      "vapourware-studios.db.tar.gz.sig": "6b4a5799d36ad315c11b719b1f02153b90a834a1496b257ec0b2cf4cd205a377",
+      "vapourware-studios.files": "44e4bef0810162e8feb763e4bf4d72396789ca714492696cff52faffcc6d41f4",
+      "vapourware-studios.files.sig": "5bb6fafeae9d99e19a67600bdc916efa942b536f3293c0729ebb5b429f9cc1f1",
+      "vapourware-studios.files.tar.gz": "44e4bef0810162e8feb763e4bf4d72396789ca714492696cff52faffcc6d41f4",
+      "vapourware-studios.files.tar.gz.sig": "5bb6fafeae9d99e19a67600bdc916efa942b536f3293c0729ebb5b429f9cc1f1"
+    },
+    "v0.2.0": {
+      "signing-key.asc": "0efb4b0c1c11480ff9705f4f8fdaff99b58d0f055ae42f2e0f084250b2d64f54",
+      "sshclient-0.2.0-linux-aarch64.pkg.tar.zst": "961241b0373a94455eb27a48693cb3ae5d89be5a0b2c6f6e60423ccdfff992b6",
+      "sshclient-0.2.0-linux-aarch64.pkg.tar.zst.sig": "a05045cca54cf5df14c45cfa5e0f30c0db703fea47116203f6ac969759db4d89",
+      "sshclient-0.2.0-linux-aarch64.rpm": "ebfecc555b7d9fc2096a022ab95138a000afae07f465dd0d9828e34b1ee570d5",
+      "sshclient-0.2.0-linux-amd64.deb": "1df42fd2b0bf8cfd66cbb0c1cf59f1cffcaf9f942193083d99a16bdb11903c36",
+      "sshclient-0.2.0-linux-arm64.deb": "95ff7e90704c927b1cf56f9d6f5fa210de3816d36148af5d52e08c0eafb92351",
+      "sshclient-0.2.0-linux-x64.pkg.tar.zst": "13b9eb97b0af6d24b102285503888cadce6b274593b50d9747475ed75971c085",
+      "sshclient-0.2.0-linux-x64.pkg.tar.zst.sig": "0840c4594a0cca446cdbce64f083834bcf7f5e11e2edcc4dade8e2d073e42891",
+      "sshclient-0.2.0-linux-x86_64.rpm": "110350422f85018ec2c45dfca9abcb7baf789aefe5473b5a731b3a5d0e8e7b44"
+    }
+  }
 }
